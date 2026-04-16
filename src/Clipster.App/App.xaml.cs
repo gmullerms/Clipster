@@ -39,6 +39,12 @@ public partial class App : Application
         Directory.CreateDirectory(logDir);
         var logPath = Path.Combine(logDir, "crash.log");
 
+        // Log every exit to understand why the app closes
+        Exit += (_, exitArgs) =>
+        {
+            File.AppendAllText(logPath, $"\n[{DateTime.Now}] APP EXIT code={exitArgs.ApplicationExitCode}\n{Environment.StackTrace}\n");
+        };
+
         DispatcherUnhandledException += (_, args) =>
         {
             File.AppendAllText(logPath, $"\n[{DateTime.Now}] UI THREAD:\n{args.Exception}\n");
