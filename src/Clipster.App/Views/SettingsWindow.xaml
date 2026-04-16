@@ -3,12 +3,90 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:models="clr-namespace:Clipster.Core.Models;assembly=Clipster.Core"
         Title="Clipster Settings"
-        Width="440" Height="500"
+        Width="480" Height="620"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent">
+
+    <Window.Resources>
+        <!-- Dark ComboBox style -->
+        <Style x:Key="DarkComboBox" TargetType="ComboBox">
+            <Setter Property="Foreground" Value="#FFE0E0F0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleBtn" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press" Focusable="False">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="#FF2A2A40" BorderBrush="#FF3A3A5C" BorderThickness="1" CornerRadius="8" Padding="10,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <ContentPresenter Grid.Column="0"/>
+                                                <Path Grid.Column="1" Data="M 0,0 L 4,4 L 8,0" Stroke="#FF888899" StrokeThickness="1.5"
+                                                      VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            </Grid>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              Margin="12,8,28,8" VerticalAlignment="Center"
+                                              HorizontalAlignment="Left"/>
+                            <Popup x:Name="Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   Placement="Bottom" Focusable="False" AllowsTransparency="True" PopupAnimation="Slide">
+                                <Border Background="#FF2A2A40" BorderBrush="#FF3A3A5C" BorderThickness="1"
+                                        CornerRadius="8" Margin="0,2,0,0" Padding="4">
+                                    <ScrollViewer MaxHeight="200">
+                                        <StackPanel IsItemsHost="True"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DarkComboBoxItem" TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="#FFE0E0F0"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF3A3A5C"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF4472C4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- Section label style -->
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#FFB0B0C0"/>
+            <Setter Property="Margin" Value="0,14,0,6"/>
+        </Style>
+    </Window.Resources>
 
     <Border CornerRadius="16" Background="#FF1E1E2E" Margin="10"
             BorderBrush="#FF3A3A5C" BorderThickness="1">
@@ -43,8 +121,7 @@
                     </StackPanel>
                     <Button Grid.Column="1" Content="&#x2715;" FontSize="14"
                             Foreground="#B0FFFFFF" Background="Transparent" BorderThickness="0"
-                            Cursor="Hand" Padding="8,4" Click="CloseButton_Click"
-                            VerticalAlignment="Top">
+                            Cursor="Hand" Padding="8,4" Click="CloseButton_Click" VerticalAlignment="Top">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
@@ -62,38 +139,73 @@
             </Border>
 
             <!-- Settings form -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,8">
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,4">
                 <StackPanel>
-                    <!-- API Key -->
-                    <TextBlock Text="OpenAI API Key" FontSize="12" FontWeight="SemiBold"
-                               Foreground="#FFB0B0C0" Margin="0,12,0,6"/>
+
+                    <!-- LLM Provider -->
+                    <TextBlock Text="AI Provider" Style="{StaticResource SectionLabel}"/>
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton Content=" OpenAI" GroupName="Provider"
+                                     IsChecked="{Binding Provider, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:LlmProvider.OpenAI}}"
+                                     Margin="0,0,16,0" FontSize="13" Foreground="#FFD0D0E0"/>
+                        <RadioButton Content=" Claude" GroupName="Provider"
+                                     IsChecked="{Binding Provider, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:LlmProvider.Claude}}"
+                                     Margin="0,0,16,0" FontSize="13" Foreground="#FFD0D0E0"/>
+                        <RadioButton Content=" Ollama (Local)" GroupName="Provider"
+                                     IsChecked="{Binding Provider, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:LlmProvider.Ollama}}"
+                                     FontSize="13" Foreground="#FFD0D0E0"/>
+                    </StackPanel>
+
+                    <!-- OpenAI settings -->
+                    <TextBlock Text="OpenAI API Key" Style="{StaticResource SectionLabel}"/>
                     <Border Background="#FF2A2A40" CornerRadius="8" BorderBrush="#FF3A3A5C" BorderThickness="1">
-                        <PasswordBox x:Name="ApiKeyBox"
-                                     Padding="10,8" FontSize="13"
-                                     Foreground="#FFE0E0F0"
-                                     Background="Transparent"
-                                     BorderThickness="0"
+                        <PasswordBox x:Name="ApiKeyBox" Padding="10,8" FontSize="13"
+                                     Foreground="#FFE0E0F0" Background="Transparent" BorderThickness="0"
                                      PasswordChanged="ApiKeyBox_PasswordChanged"/>
                     </Border>
 
-                    <!-- Model -->
-                    <TextBlock Text="Model" FontSize="12" FontWeight="SemiBold"
-                               Foreground="#FFB0B0C0" Margin="0,16,0,6"/>
+                    <TextBlock Text="OpenAI Model" Style="{StaticResource SectionLabel}"/>
+                    <ComboBox SelectedValue="{Binding ModelName}" SelectedValuePath="Content"
+                              Style="{StaticResource DarkComboBox}" ItemContainerStyle="{StaticResource DarkComboBoxItem}">
+                        <ComboBoxItem Content="gpt-4o"/>
+                        <ComboBoxItem Content="gpt-4o-mini"/>
+                        <ComboBoxItem Content="gpt-4-turbo"/>
+                        <ComboBoxItem Content="gpt-3.5-turbo"/>
+                    </ComboBox>
+
+                    <!-- Claude settings -->
+                    <TextBlock Text="Claude API Key" Style="{StaticResource SectionLabel}"/>
                     <Border Background="#FF2A2A40" CornerRadius="8" BorderBrush="#FF3A3A5C" BorderThickness="1">
-                        <ComboBox SelectedValue="{Binding ModelName}" SelectedValuePath="Content"
-                                  FontSize="13" Padding="10,8"
-                                  Background="Transparent" Foreground="#FFE0E0F0"
-                                  BorderThickness="0">
-                            <ComboBoxItem Content="gpt-4o"/>
-                            <ComboBoxItem Content="gpt-4o-mini"/>
-                            <ComboBoxItem Content="gpt-4-turbo"/>
-                            <ComboBoxItem Content="gpt-3.5-turbo"/>
-                        </ComboBox>
+                        <PasswordBox x:Name="ClaudeKeyBox" Padding="10,8" FontSize="13"
+                                     Foreground="#FFE0E0F0" Background="Transparent" BorderThickness="0"
+                                     PasswordChanged="ClaudeKeyBox_PasswordChanged"/>
+                    </Border>
+
+                    <TextBlock Text="Claude Model" Style="{StaticResource SectionLabel}"/>
+                    <ComboBox SelectedValue="{Binding ClaudeModelName}" SelectedValuePath="Content"
+                              Style="{StaticResource DarkComboBox}" ItemContainerStyle="{StaticResource DarkComboBoxItem}">
+                        <ComboBoxItem Content="claude-sonnet-4-20250514"/>
+                        <ComboBoxItem Content="claude-opus-4-20250514"/>
+                        <ComboBoxItem Content="claude-haiku-4-20250414"/>
+                    </ComboBox>
+
+                    <!-- Ollama settings -->
+                    <TextBlock Text="Ollama Endpoint" Style="{StaticResource SectionLabel}"/>
+                    <Border Background="#FF2A2A40" CornerRadius="8" BorderBrush="#FF3A3A5C" BorderThickness="1">
+                        <TextBox Text="{Binding OllamaEndpoint}" Padding="10,8" FontSize="13"
+                                 Foreground="#FFE0E0F0" Background="Transparent" BorderThickness="0"
+                                 CaretBrush="#FF6B5CE7"/>
+                    </Border>
+
+                    <TextBlock Text="Ollama Model" Style="{StaticResource SectionLabel}"/>
+                    <Border Background="#FF2A2A40" CornerRadius="8" BorderBrush="#FF3A3A5C" BorderThickness="1">
+                        <TextBox Text="{Binding OllamaModelName}" Padding="10,8" FontSize="13"
+                                 Foreground="#FFE0E0F0" Background="Transparent" BorderThickness="0"
+                                 CaretBrush="#FF6B5CE7"/>
                     </Border>
 
                     <!-- Character Style -->
-                    <TextBlock Text="Character Style" FontSize="12" FontWeight="SemiBold"
-                               Foreground="#FFB0B0C0" Margin="0,16,0,6"/>
+                    <TextBlock Text="Character Style" Style="{StaticResource SectionLabel}"/>
                     <StackPanel Orientation="Horizontal">
                         <RadioButton Content=" Classic"
                                      IsChecked="{Binding CharacterStyle, Converter={StaticResource EnumToBoolConverter}, ConverterParameter={x:Static models:CharacterStyle.Classic}}"
@@ -104,17 +216,15 @@
                     </StackPanel>
 
                     <!-- Feature toggles -->
-                    <TextBlock Text="Features" FontSize="12" FontWeight="SemiBold"
-                               Foreground="#FFB0B0C0" Margin="0,20,0,8"/>
-                    <CheckBox Content=" Clipboard monitoring"
-                              IsChecked="{Binding EnableClipboardMonitoring}"
-                              Margin="0,6" FontSize="13" Foreground="#FFD0D0E0"/>
-                    <CheckBox Content=" Proactive tips"
-                              IsChecked="{Binding EnableProactiveTips}"
-                              Margin="0,6" FontSize="13" Foreground="#FFD0D0E0"/>
-                    <CheckBox Content=" Screen reading (OCR)"
-                              IsChecked="{Binding EnableOcr}"
-                              Margin="0,6" FontSize="13" Foreground="#FFD0D0E0"/>
+                    <TextBlock Text="Features" Style="{StaticResource SectionLabel}"/>
+                    <CheckBox Content=" Clipboard monitoring" IsChecked="{Binding EnableClipboardMonitoring}"
+                              Margin="0,4" FontSize="13" Foreground="#FFD0D0E0"/>
+                    <CheckBox Content=" Proactive tips" IsChecked="{Binding EnableProactiveTips}"
+                              Margin="0,4" FontSize="13" Foreground="#FFD0D0E0"/>
+                    <CheckBox Content=" Screen reading (OCR)" IsChecked="{Binding EnableOcr}"
+                              Margin="0,4" FontSize="13" Foreground="#FFD0D0E0"/>
+                    <CheckBox Content=" Screen watcher" IsChecked="{Binding EnableScreenWatcher}"
+                              Margin="0,4" FontSize="13" Foreground="#FFD0D0E0"/>
                 </StackPanel>
             </ScrollViewer>
 

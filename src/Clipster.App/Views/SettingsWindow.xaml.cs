@@ -14,12 +14,21 @@ public partial class SettingsWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
 
-        Loaded += (_, _) => ApiKeyBox.Password = _viewModel.ApiKey;
+        Loaded += (_, _) =>
+        {
+            ApiKeyBox.Password = _viewModel.ApiKey;
+            ClaudeKeyBox.Password = _viewModel.ClaudeApiKey;
+        };
     }
 
     private void ApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
     {
         _viewModel.ApiKey = ApiKeyBox.Password;
+    }
+
+    private void ClaudeKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ClaudeApiKey = ClaudeKeyBox.Password;
     }
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
