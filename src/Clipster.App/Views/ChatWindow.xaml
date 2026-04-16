@@ -12,6 +12,7 @@
         ResizeMode="CanResizeWithGrip">
     <Window.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <converters:NonEmptyToVisibilityConverter x:Key="NonEmptyToVis"/>
     </Window.Resources>
 
     <!-- Outer border = the window frame with rounded corners + shadow -->
@@ -49,7 +50,13 @@
                         </Border>
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="Clipster" FontSize="15" FontWeight="Bold" Foreground="White"/>
-                            <TextBlock Text="{Binding StatusText}" FontSize="10" Foreground="#B0FFFFFF"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding StatusText}" FontSize="10" Foreground="#B0FFFFFF"/>
+                                <TextBlock Text=" | " FontSize="10" Foreground="#50FFFFFF"
+                                           Visibility="{Binding TokenInfo, Converter={StaticResource NonEmptyToVis}}"/>
+                                <TextBlock Text="{Binding TokenInfo}" FontSize="10" Foreground="#70FFFFFF"
+                                           Visibility="{Binding TokenInfo, Converter={StaticResource NonEmptyToVis}}"/>
+                            </StackPanel>
                         </StackPanel>
                     </StackPanel>
                     <Button Grid.Column="1" Content="&#x2715;" FontSize="14"

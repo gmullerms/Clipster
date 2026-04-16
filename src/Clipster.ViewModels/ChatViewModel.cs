@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Clipster.Core.Interfaces;
@@ -23,7 +24,16 @@ public partial class ChatViewModel : ObservableObject
     [ObservableProperty]
     private string _statusText = "Ready to help!";
 
+    [ObservableProperty]
+    private string _tokenInfo = string.Empty;
+
     public ObservableCollection<ChatMessage> Messages { get; } = new();
+
+    /// <summary>
+    /// Fired during streaming with partial content updates for the last assistant message.
+    /// The string is the full accumulated text so far.
+    /// </summary>
+    public event EventHandler<string>? StreamingUpdate;
 
     public ChatViewModel(
         IAiService aiService,
@@ -68,21 +78,56 @@ public partial class ChatViewModel : ObservableObject
                 ? _conversationHistory.GetRange(_conversationHistory.Count - 20, 20)
                 : _conversationHistory;
 
-            var response = await _aiService.ChatAsync(historyToSend);
-
+            // Add a placeholder message for streaming
             var assistantMessage = new ChatMessage
             {
                 Role = ChatRole.Assistant,
-                Content = response
+                Content = ""
             };
-
             Messages.Add(assistantMessage);
-            _conversationHistory.Add(assistantMessage);
+
+            var sb = new StringBuilder();
+            var firstChunk = true;
+
+            await foreach (var chunk in _aiService.ChatStreamAsync(historyToSend))
+            {
+                if (firstChunk)
+                {
+                    _animationService.PlayOnce(AnimationState.Talking);
+                    StatusText = "Responding...";
+                    firstChunk = false;
+                }
+
+                sb.Append(chunk);
+                var fullText = sb.ToString();
+
+                // Update the message in-place
+                Messages[^1] = new ChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    Content = fullText,
+                    Timestamp = assistantMessage.Timestamp
+                };
+
+                StreamingUpdate?.Invoke(this, fullText);
+            }
+
+            var finalContent = sb.ToString();
+            _conversationHistory.Add(new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Content = finalContent
+            });
+
+            UpdateTokenInfo();
             StatusText = "Ready to help!";
-            _animationService.PlayOnce(AnimationState.Talking);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("API key"))
         {
+            // Remove placeholder if it was added
+            if (Messages.Count > 0 && Messages[^1].Role == ChatRole.Assistant && string.IsNullOrEmpty(Messages[^1].Content))
+                Messages.RemoveAt(Messages.Count - 1);
+
             Messages.Add(new ChatMessage
             {
                 Role = ChatRole.Assistant,
@@ -93,6 +138,9 @@ public partial class ChatViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (Messages.Count > 0 && Messages[^1].Role == ChatRole.Assistant && string.IsNullOrEmpty(Messages[^1].Content))
+                Messages.RemoveAt(Messages.Count - 1);
+
             Messages.Add(new ChatMessage
             {
                 Role = ChatRole.Assistant,
@@ -116,18 +164,12 @@ public partial class ChatViewModel : ObservableObject
         StatusText = "Looking at your screen...";
         _animationService.TransitionTo(AnimationState.Looking);
 
-        Messages.Add(new ChatMessage
-        {
-            Role = ChatRole.User,
-            Content = "[Analyzing screen...]"
-        });
+        Messages.Add(new ChatMessage { Role = ChatRole.User, Content = "[Analyzing screen...]" });
 
         try
         {
-            // Capture screen
             var screenshot = await Task.Run(() => _screenCaptureService.CaptureFullScreen());
 
-            // Run OCR if available
             var ocrText = string.Empty;
             if (_ocrService != null)
             {
@@ -138,42 +180,66 @@ public partial class ChatViewModel : ObservableObject
             StatusText = "Thinking about what I see...";
             _animationService.TransitionTo(AnimationState.Thinking);
 
-            // Send to GPT-4o vision
             var response = await _aiService.AnalyzeScreenAsync(screenshot, ocrText);
 
-            var assistantMessage = new ChatMessage
-            {
-                Role = ChatRole.Assistant,
-                Content = response
-            };
-            Messages.Add(assistantMessage);
-            _conversationHistory.Add(assistantMessage);
+            Messages.Add(new ChatMessage { Role = ChatRole.Assistant, Content = response });
+            _conversationHistory.Add(new ChatMessage { Role = ChatRole.Assistant, Content = response });
+            UpdateTokenInfo();
             StatusText = "Ready to help!";
             _animationService.PlayOnce(AnimationState.Talking);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("API key"))
         {
-            Messages.Add(new ChatMessage
-            {
-                Role = ChatRole.Assistant,
-                Content = "I need an API key to see! Please set it in Settings."
-            });
+            Messages.Add(new ChatMessage { Role = ChatRole.Assistant, Content = "I need an API key to see! Please set it in Settings." });
             StatusText = "API key needed";
             _animationService.TransitionTo(AnimationState.Confused);
         }
         catch (Exception ex)
         {
-            Messages.Add(new ChatMessage
-            {
-                Role = ChatRole.Assistant,
-                Content = $"Oops, I couldn't read the screen! Error: {ex.Message}"
-            });
+            Messages.Add(new ChatMessage { Role = ChatRole.Assistant, Content = $"Oops! Error: {ex.Message}" });
             StatusText = "Error occurred";
             _animationService.TransitionTo(AnimationState.Confused);
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void HandleFileDrop(string[] filePaths)
+    {
+        if (filePaths.Length == 0) return;
+
+        var fileList = string.Join(", ", filePaths.Select(System.IO.Path.GetFileName));
+        var ext = System.IO.Path.GetExtension(filePaths[0]).ToLowerInvariant();
+
+        if (ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp")
+        {
+            UserInput = $"[Dropped image: {fileList}]\nPlease analyze this image.";
+        }
+        else
+        {
+            // Read text files and include content
+            try
+            {
+                var content = System.IO.File.ReadAllText(filePaths[0]);
+                var preview = content.Length > 2000 ? content[..2000] + "\n... (truncated)" : content;
+                UserInput = $"Here's the contents of {fileList}:\n\n```\n{preview}\n```\n\nPlease analyze this.";
+            }
+            catch
+            {
+                UserInput = $"I dropped a file: {fileList}. Please help me with it.";
+            }
+        }
+    }
+
+    private void UpdateTokenInfo()
+    {
+        var usage = _aiService.LastUsage;
+        if (usage != null)
+        {
+            TokenInfo = $"{usage.TotalTokens} tokens (~${usage.EstimatedCost:F4})";
         }
     }
 

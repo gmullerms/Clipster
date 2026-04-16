@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Clipster.Core.Interfaces;
 using Clipster.Core.Models;
 using OpenAI;
@@ -11,6 +12,8 @@ namespace Clipster.Services.AI;
 public class OpenAiService : IAiService
 {
     private readonly ISettingsService _settings;
+
+    public TokenUsage? LastUsage { get; private set; }
 
     public OpenAiService(ISettingsService settings)
     {
@@ -27,15 +30,10 @@ public class OpenAiService : IAiService
         return client.GetChatClient(_settings.Settings.ModelName);
     }
 
-    public async Task<string> ChatAsync(IReadOnlyList<AppChatMessage> conversationHistory, CancellationToken ct = default)
+    private static List<AiChatMessage> BuildMessages(string systemPrompt, IReadOnlyList<AppChatMessage> history)
     {
-        var client = CreateClient();
-        var messages = new List<AiChatMessage>
-        {
-            AiChatMessage.CreateSystemMessage(PromptTemplates.ClipsterSystemPrompt)
-        };
-
-        foreach (var msg in conversationHistory)
+        var messages = new List<AiChatMessage> { AiChatMessage.CreateSystemMessage(systemPrompt) };
+        foreach (var msg in history)
         {
             messages.Add(msg.Role switch
             {
@@ -44,9 +42,67 @@ public class OpenAiService : IAiService
                 _ => AiChatMessage.CreateSystemMessage(msg.Content)
             });
         }
+        return messages;
+    }
 
+    private void TrackUsage(ChatCompletion completion)
+    {
+        var usage = completion.Usage;
+        if (usage == null) return;
+        LastUsage = new TokenUsage
+        {
+            PromptTokens = usage.InputTokenCount,
+            CompletionTokens = usage.OutputTokenCount,
+            EstimatedCost = EstimateCost(usage.InputTokenCount, usage.OutputTokenCount)
+        };
+    }
+
+    private decimal EstimateCost(int input, int output)
+    {
+        var model = _settings.Settings.ModelName.ToLowerInvariant();
+        return model switch
+        {
+            "gpt-4o" => input * 2.5m / 1_000_000 + output * 10m / 1_000_000,
+            "gpt-4o-mini" => input * 0.15m / 1_000_000 + output * 0.6m / 1_000_000,
+            "gpt-4-turbo" => input * 10m / 1_000_000 + output * 30m / 1_000_000,
+            _ => input * 2.5m / 1_000_000 + output * 10m / 1_000_000,
+        };
+    }
+
+    public async Task<string> ChatAsync(IReadOnlyList<AppChatMessage> conversationHistory, CancellationToken ct = default)
+    {
+        var client = CreateClient();
+        var messages = BuildMessages(PromptTemplates.ClipsterSystemPrompt, conversationHistory);
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        TrackUsage(completion.Value);
         return completion.Value.Content[0].Text;
+    }
+
+    public async IAsyncEnumerable<string> ChatStreamAsync(
+        IReadOnlyList<AppChatMessage> conversationHistory,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var client = CreateClient();
+        var messages = BuildMessages(PromptTemplates.ClipsterSystemPrompt, conversationHistory);
+
+        await foreach (var update in client.CompleteChatStreamingAsync(messages, cancellationToken: ct))
+        {
+            foreach (var part in update.ContentUpdate)
+            {
+                if (!string.IsNullOrEmpty(part.Text))
+                    yield return part.Text;
+            }
+
+            if (update.Usage != null)
+            {
+                LastUsage = new TokenUsage
+                {
+                    PromptTokens = update.Usage.InputTokenCount,
+                    CompletionTokens = update.Usage.OutputTokenCount,
+                    EstimatedCost = EstimateCost(update.Usage.InputTokenCount, update.Usage.OutputTokenCount)
+                };
+            }
+        }
     }
 
     public async Task<string> SummarizeAsync(string text, CancellationToken ct = default)
@@ -57,8 +113,8 @@ public class OpenAiService : IAiService
             AiChatMessage.CreateSystemMessage(PromptTemplates.SummarizePrompt),
             AiChatMessage.CreateUserMessage(text)
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        TrackUsage(completion.Value);
         return completion.Value.Content[0].Text;
     }
 
@@ -71,8 +127,8 @@ public class OpenAiService : IAiService
             AiChatMessage.CreateSystemMessage(systemPrompt),
             AiChatMessage.CreateUserMessage(content.Text)
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        TrackUsage(completion.Value);
         return completion.Value.Content[0].Text;
     }
 
@@ -80,18 +136,16 @@ public class OpenAiService : IAiService
     {
         var client = CreateClient();
         var systemPrompt = string.Format(PromptTemplates.ScreenAnalysisPrompt, ocrText);
-
         var imageData = BinaryData.FromBytes(screenshotPng);
         var messages = new List<AiChatMessage>
         {
             AiChatMessage.CreateSystemMessage(systemPrompt),
             AiChatMessage.CreateUserMessage(
                 ChatMessageContentPart.CreateImagePart(imageData, "image/png"),
-                ChatMessageContentPart.CreateTextPart("What's on my screen? Please help!")
-            )
+                ChatMessageContentPart.CreateTextPart("What's on my screen? Please help!"))
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        TrackUsage(completion.Value);
         return completion.Value.Content[0].Text;
     }
 
@@ -104,8 +158,8 @@ public class OpenAiService : IAiService
             AiChatMessage.CreateSystemMessage(systemPrompt),
             AiChatMessage.CreateUserMessage("Give me a helpful tip!")
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        TrackUsage(completion.Value);
         return completion.Value.Content[0].Text;
     }
 
@@ -117,11 +171,9 @@ public class OpenAiService : IAiService
             AiChatMessage.CreateSystemMessage(PromptTemplates.QuickPromptSystem),
             AiChatMessage.CreateUserMessage(prompt)
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
-        var raw = completion.Value.Content[0].Text;
-
-        return ParseQuickPromptResponse(raw);
+        TrackUsage(completion.Value);
+        return ResponseParser.ParseQuickPromptResponse(completion.Value.Content[0].Text);
     }
 
     public async Task<ScreenInsight> WatchScreenAsync(byte[] screenshotPng, CancellationToken ct = default)
@@ -141,75 +193,8 @@ public class OpenAiService : IAiService
                 ChatMessageContentPart.CreateImagePart(imageData, "image/png"),
                 ChatMessageContentPart.CreateTextPart("What's happening on this screen? Can you help with anything?"))
         };
-
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
-        var raw = completion.Value.Content[0].Text;
-
-        return ParseScreenInsight(raw);
-    }
-
-    private static ScreenInsight ParseScreenInsight(string raw)
-    {
-        var type = InsightType.None;
-        var summary = string.Empty;
-        var detail = string.Empty;
-
-        foreach (var line in raw.Split('\n'))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.StartsWith("TYPE:", StringComparison.OrdinalIgnoreCase))
-            {
-                var val = trimmed[5..].Trim();
-                type = val.ToLowerInvariant() switch
-                {
-                    "error" => InsightType.Error,
-                    "warning" => InsightType.Warning,
-                    "suggestion" => InsightType.Suggestion,
-                    "question" => InsightType.Question,
-                    _ => InsightType.None
-                };
-            }
-            else if (trimmed.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
-            {
-                summary = trimmed[8..].Trim();
-            }
-            else if (trimmed.StartsWith("DETAIL:", StringComparison.OrdinalIgnoreCase))
-            {
-                detail = trimmed[7..].Trim();
-            }
-        }
-
-        return new ScreenInsight
-        {
-            Type = type,
-            Summary = summary,
-            Detail = detail,
-            ShouldNotify = type != InsightType.None && !string.IsNullOrWhiteSpace(summary)
-        };
-    }
-
-    private static QuickPromptResult ParseQuickPromptResponse(string raw)
-    {
-        var separatorIndex = raw.IndexOf("\n---", StringComparison.Ordinal);
-
-        if (separatorIndex >= 0)
-        {
-            var clipboard = raw[..separatorIndex].Trim();
-            var note = raw[(separatorIndex + 4)..].Trim();
-
-            return new QuickPromptResult
-            {
-                ClipboardContent = clipboard,
-                Note = note,
-                IsLongAnswer = clipboard.Length > 300 || clipboard.Count(c => c == '\n') > 10
-            };
-        }
-
-        return new QuickPromptResult
-        {
-            ClipboardContent = raw.Trim(),
-            Note = "Ready to paste!",
-            IsLongAnswer = raw.Length > 300
-        };
+        TrackUsage(completion.Value);
+        return ResponseParser.ParseScreenInsight(completion.Value.Content[0].Text);
     }
 }

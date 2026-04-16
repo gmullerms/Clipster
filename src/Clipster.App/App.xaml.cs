@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Win32;
@@ -112,7 +113,13 @@ public partial class App : Application
     {
         // Core services
         services.AddSingleton<ISettingsService, JsonSettingsService>();
-        services.AddSingleton<IAiService, OpenAiService>();
+        services.AddHttpClient();
+        services.AddSingleton<IAiService>(sp =>
+        {
+            var settings = sp.GetRequiredService<ISettingsService>();
+            var httpFactory = sp.GetService<IHttpClientFactory>();
+            return AiServiceFactory.Create(settings.Settings.Provider, settings, httpFactory);
+        });
         services.AddSingleton<IAnimationService, AnimationService>();
         services.AddSingleton<IClipboardService, ClipboardMonitorService>();
         services.AddSingleton<ITipService, ProactiveTipService>();
