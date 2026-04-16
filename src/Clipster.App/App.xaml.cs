@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Win32;
 using Clipster.Core.Interfaces;
 using Clipster.Core.Models;
 using Clipster.Services.AI;
@@ -19,6 +21,9 @@ namespace Clipster.App;
 
 public partial class App : Application
 {
+    private const string StartupRegistryKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+    private const string AppName = "Clipster";
+
     private IHost? _host;
     private TaskbarIcon? _trayIcon;
     private ClipsterOverlayWindow? _overlayWindow;
@@ -30,10 +35,10 @@ public partial class App : Application
 
         DispatcherUnhandledException += (_, args) =>
         {
-            var logPath = System.IO.Path.Combine(
+            var logPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipster", "crash.log");
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)!);
-            System.IO.File.WriteAllText(logPath, $"{DateTime.Now}\n{args.Exception}\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+            File.WriteAllText(logPath, $"{DateTime.Now}\n{args.Exception}\n");
             Console.Error.WriteLine(args.Exception);
             args.Handled = true;
         };
@@ -59,13 +64,27 @@ public partial class App : Application
 
             // Setup system tray
             SetupTrayIcon();
+
+            // First launch: prompt for API key if not set
+            if (string.IsNullOrWhiteSpace(settings.Settings.ApiKey))
+            {
+                await System.Threading.Tasks.Task.Delay(1500); // Let greeting animation finish
+                var windowManager = _host.Services.GetRequiredService<IWindowManager>();
+                windowManager.ShowBubble(
+                    "Welcome! I need an OpenAI API key to get started. Click below to set it up!",
+                    null,
+                    new List<BubbleAction>
+                    {
+                        new() { Label = "Open Settings", Callback = () => windowManager.ShowSettings() },
+                    });
+            }
         }
         catch (Exception ex)
         {
-            var logPath = System.IO.Path.Combine(
+            var logPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipster", "crash.log");
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)!);
-            System.IO.File.WriteAllText(logPath, $"{DateTime.Now}\n{ex}\n");
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+            File.WriteAllText(logPath, $"{DateTime.Now}\n{ex}\n");
             MessageBox.Show($"Clipster failed to start:\n\n{ex.Message}", "Clipster Error", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
@@ -124,7 +143,6 @@ public partial class App : Application
 
     private async void OnQuickPromptHotkey(object? sender, EventArgs e)
     {
-        // Show the quick prompt dialog
         var promptWindow = new QuickPromptWindow();
         promptWindow.ShowDialog();
 
@@ -135,7 +153,6 @@ public partial class App : Application
         var animationService = _host.Services.GetRequiredService<IAnimationService>();
         var windowManager = _host.Services.GetRequiredService<IWindowManager>();
 
-        // Show thinking state
         animationService.TransitionTo(AnimationState.Thinking);
         windowManager.ShowBubble("Let me think about that...", TimeSpan.FromSeconds(30));
 
@@ -143,10 +160,8 @@ public partial class App : Application
         {
             var result = await aiService.QuickPromptAsync(promptWindow.PromptText);
 
-            // Copy the clean, paste-ready content to clipboard
             Clipboard.SetText(result.ClipboardContent);
 
-            // Build the bubble message based on answer type
             var clipPreview = result.ClipboardContent.Length > 80
                 ? result.ClipboardContent[..77] + "..."
                 : result.ClipboardContent;
@@ -154,12 +169,10 @@ public partial class App : Application
             string bubbleText;
             if (result.IsLongAnswer)
             {
-                // Long answer: show note + hint to open chat
                 bubbleText = $"Copied to clipboard!\n\n{result.Note}";
             }
             else
             {
-                // Short answer: show what was copied + note
                 bubbleText = $"Copied!\n\n> {clipPreview}";
                 if (!string.IsNullOrWhiteSpace(result.Note) && result.Note != "Ready to paste!")
                     bubbleText += $"\n\n{result.Note}";
@@ -172,7 +185,6 @@ public partial class App : Application
                 new() { Label = "OK", Callback = () => windowManager.HideBubble() },
             };
 
-            // Add "See full answer" for long responses
             if (result.IsLongAnswer)
             {
                 actions.Insert(0, new BubbleAction
@@ -217,7 +229,7 @@ public partial class App : Application
     {
         var menu = new System.Windows.Controls.ContextMenu();
 
-        var quickItem = new System.Windows.Controls.MenuItem { Header = "Quick Prompt (Ctrl+Shift+Space)" };
+        var quickItem = new System.Windows.Controls.MenuItem { Header = "Quick Prompt  (Ctrl+Shift+Space)" };
         quickItem.Click += (_, _) => OnQuickPromptHotkey(null, EventArgs.Empty);
         menu.Items.Add(quickItem);
 
@@ -225,9 +237,25 @@ public partial class App : Application
         chatItem.Click += (_, _) => _host?.Services.GetRequiredService<IWindowManager>().ShowChat();
         menu.Items.Add(chatItem);
 
-        var settingsItem = new System.Windows.Controls.MenuItem { Header = "Settings" };
-        settingsItem.Click += (_, _) => _host?.Services.GetRequiredService<IWindowManager>().ShowSettings();
-        menu.Items.Add(settingsItem);
+        menu.Items.Add(new System.Windows.Controls.Separator());
+
+        // Animation demo submenu
+        var animMenu = new System.Windows.Controls.MenuItem { Header = "Animations" };
+        foreach (var state in Enum.GetValues<AnimationState>())
+        {
+            var s = state;
+            var item = new System.Windows.Controls.MenuItem { Header = s.ToString() };
+            item.Click += (_, _) =>
+            {
+                var anim = _host?.Services.GetRequiredService<IAnimationService>();
+                if (s == AnimationState.Idle || s == AnimationState.Thinking || s == AnimationState.Looking)
+                    anim?.TransitionTo(s);
+                else
+                    anim?.PlayOnce(s);
+            };
+            animMenu.Items.Add(item);
+        }
+        menu.Items.Add(animMenu);
 
         menu.Items.Add(new System.Windows.Controls.Separator());
 
@@ -238,6 +266,23 @@ public partial class App : Application
         var hideItem = new System.Windows.Controls.MenuItem { Header = "Hide Clipster" };
         hideItem.Click += (_, _) => _overlayWindow?.Hide();
         menu.Items.Add(hideItem);
+
+        // Startup on boot toggle
+        var startupItem = new System.Windows.Controls.MenuItem { Header = "Start with Windows" };
+        startupItem.IsCheckable = true;
+        startupItem.IsChecked = IsStartupEnabled();
+        startupItem.Click += (_, _) =>
+        {
+            if (startupItem.IsChecked)
+                EnableStartup();
+            else
+                DisableStartup();
+        };
+        menu.Items.Add(startupItem);
+
+        var settingsItem = new System.Windows.Controls.MenuItem { Header = "Settings" };
+        settingsItem.Click += (_, _) => _host?.Services.GetRequiredService<IWindowManager>().ShowSettings();
+        menu.Items.Add(settingsItem);
 
         menu.Items.Add(new System.Windows.Controls.Separator());
 
@@ -252,6 +297,26 @@ public partial class App : Application
         menu.Items.Add(exitItem);
 
         return menu;
+    }
+
+    private static bool IsStartupEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, false);
+        return key?.GetValue(AppName) != null;
+    }
+
+    private static void EnableStartup()
+    {
+        var exePath = Environment.ProcessPath;
+        if (exePath == null) return;
+        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, true);
+        key?.SetValue(AppName, $"\"{exePath}\"");
+    }
+
+    private static void DisableStartup()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, true);
+        key?.DeleteValue(AppName, false);
     }
 
     protected override void OnExit(ExitEventArgs e)
