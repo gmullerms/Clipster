@@ -58,20 +58,27 @@ public class ProactiveTipService : ITipService
 
     private async void OnTimerTick()
     {
-        if (!_running) return;
-
-        // Check snooze
-        if (_snoozedUntil.HasValue && DateTime.Now < _snoozedUntil.Value)
+        try
         {
+            if (!_running) return;
+
+            if (_snoozedUntil.HasValue && DateTime.Now < _snoozedUntil.Value)
+            {
+                ScheduleNext();
+                return;
+            }
+            _snoozedUntil = null;
+
+            var tip = await GenerateTip();
+            TipReady?.Invoke(this, new TipReadyEventArgs { TipText = tip });
+
             ScheduleNext();
-            return;
         }
-        _snoozedUntil = null;
-
-        var tip = await GenerateTip();
-        TipReady?.Invoke(this, new TipReadyEventArgs { TipText = tip });
-
-        ScheduleNext();
+        catch
+        {
+            // Never let tip generation crash the app
+            ScheduleNext();
+        }
     }
 
     private async Task<string> GenerateTip()

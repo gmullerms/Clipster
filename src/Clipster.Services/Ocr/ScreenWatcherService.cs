@@ -88,21 +88,26 @@ public class ScreenWatcherService : IDisposable
 
     private void CheckIdleState()
     {
-        if (!_running || _analyzing || IsSnoozed()) return;
-
-        var idleTime = GetIdleTime();
-
-        // User just became idle (crossed threshold) and we haven't notified yet
-        if (idleTime >= _idleThreshold && !_idleNotifiedThisSession)
+        try
         {
-            _idleNotifiedThisSession = true;
-            RunAnalysis($"User has been idle for {idleTime.TotalSeconds:F0} seconds. They may be reading, thinking, or stuck. Be proactive and helpful.");
+            if (!_running || _analyzing || IsSnoozed()) return;
+
+            var idleTime = GetIdleTime();
+
+            if (idleTime >= _idleThreshold && !_idleNotifiedThisSession)
+            {
+                _idleNotifiedThisSession = true;
+                RunAnalysis($"User has been idle for {idleTime.TotalSeconds:F0} seconds. They may be reading, thinking, or stuck. Be proactive and helpful.");
+            }
+
+            if (idleTime < TimeSpan.FromSeconds(10))
+            {
+                _idleNotifiedThisSession = false;
+            }
         }
-
-        // User came back from idle -- reset so we can notify next idle session
-        if (idleTime < TimeSpan.FromSeconds(10))
+        catch
         {
-            _idleNotifiedThisSession = false;
+            // Never let idle check crash the app
         }
     }
 
