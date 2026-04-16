@@ -126,14 +126,20 @@ public class OpenAiService : IAiService
 
     public async Task<ScreenInsight> WatchScreenAsync(byte[] screenshotPng, CancellationToken ct = default)
     {
+        return await WatchScreenAsync(screenshotPng, "Manual scan triggered by user.", ct);
+    }
+
+    public async Task<ScreenInsight> WatchScreenAsync(byte[] screenshotPng, string context, CancellationToken ct = default)
+    {
         var client = CreateClient();
+        var systemPrompt = string.Format(PromptTemplates.ScreenWatcherPrompt, context);
         var imageData = BinaryData.FromBytes(screenshotPng);
         var messages = new List<AiChatMessage>
         {
-            AiChatMessage.CreateSystemMessage(PromptTemplates.ScreenWatcherPrompt),
+            AiChatMessage.CreateSystemMessage(systemPrompt),
             AiChatMessage.CreateUserMessage(
                 ChatMessageContentPart.CreateImagePart(imageData, "image/png"),
-                ChatMessageContentPart.CreateTextPart("Analyze this screenshot. What do you see?"))
+                ChatMessageContentPart.CreateTextPart("What's happening on this screen? Can you help with anything?"))
         };
 
         var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);

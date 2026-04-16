@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Clipster.Core.Interfaces;
 using Clipster.Core.Models;
 
@@ -5,13 +6,27 @@ namespace Clipster.Services.Ocr;
 
 public class ScreenWatcherService : IDisposable
 {
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
     private readonly IScreenCaptureService _screenCapture;
     private readonly IAiService _aiService;
-    private Timer? _timer;
+    private Timer? _periodicTimer;
+    private Timer? _idleCheckTimer;
     private bool _running;
     private bool _analyzing;
     private DateTime? _snoozedUntil;
-    private TimeSpan _interval = TimeSpan.FromMinutes(5);
+    private TimeSpan _periodicInterval = TimeSpan.FromMinutes(5);
+    private TimeSpan _idleThreshold = TimeSpan.FromMinutes(2);
+    private bool _idleNotifiedThisSession;
+    private string _lastScreenContext = string.Empty;
 
     public event EventHandler<ScreenInsight>? InsightReady;
 
@@ -21,19 +36,26 @@ public class ScreenWatcherService : IDisposable
         _aiService = aiService;
     }
 
-    public void Start(TimeSpan? interval = null)
+    public void Start(TimeSpan? periodicInterval = null)
     {
         if (_running) return;
         _running = true;
-        if (interval.HasValue) _interval = interval.Value;
-        ScheduleNext();
+        if (periodicInterval.HasValue) _periodicInterval = periodicInterval.Value;
+
+        // Periodic scan every N minutes
+        SchedulePeriodicScan();
+
+        // Idle detection: check every 30 seconds if user has been idle
+        _idleCheckTimer = new Timer(_ => CheckIdleState(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     }
 
     public void Stop()
     {
         _running = false;
-        _timer?.Dispose();
-        _timer = null;
+        _periodicTimer?.Dispose();
+        _periodicTimer = null;
+        _idleCheckTimer?.Dispose();
+        _idleCheckTimer = null;
     }
 
     public void Snooze(TimeSpan duration)
@@ -43,60 +65,95 @@ public class ScreenWatcherService : IDisposable
 
     public void SetInterval(TimeSpan interval)
     {
-        _interval = interval;
+        _periodicInterval = interval;
         if (_running)
         {
-            _timer?.Dispose();
-            ScheduleNext();
+            _periodicTimer?.Dispose();
+            SchedulePeriodicScan();
         }
     }
 
-    /// <summary>
-    /// Manually trigger a screen analysis right now (for the hotkey).
-    /// </summary>
-    public async Task<ScreenInsight> AnalyzeNowAsync(CancellationToken ct = default)
+    public async Task<ScreenInsight> AnalyzeNowAsync(string context = "", CancellationToken ct = default)
     {
         var screenshot = await Task.Run(() => _screenCapture.CaptureFullScreen(), ct);
         return await _aiService.WatchScreenAsync(screenshot, ct);
     }
 
-    private void ScheduleNext()
+    private void SchedulePeriodicScan()
     {
         if (!_running) return;
-        _timer?.Dispose();
-        _timer = new Timer(_ => OnTimerTick(), null, _interval, Timeout.InfiniteTimeSpan);
+        _periodicTimer?.Dispose();
+        _periodicTimer = new Timer(_ => RunAnalysis("Periodic background scan."), null, _periodicInterval, Timeout.InfiniteTimeSpan);
     }
 
-    private async void OnTimerTick()
+    private void CheckIdleState()
     {
-        if (!_running || _analyzing) return;
+        if (!_running || _analyzing || IsSnoozed()) return;
 
-        // Check snooze
-        if (_snoozedUntil.HasValue && DateTime.Now < _snoozedUntil.Value)
+        var idleTime = GetIdleTime();
+
+        // User just became idle (crossed threshold) and we haven't notified yet
+        if (idleTime >= _idleThreshold && !_idleNotifiedThisSession)
         {
-            ScheduleNext();
-            return;
+            _idleNotifiedThisSession = true;
+            RunAnalysis($"User has been idle for {idleTime.TotalSeconds:F0} seconds. They may be reading, thinking, or stuck. Be proactive and helpful.");
         }
-        _snoozedUntil = null;
+
+        // User came back from idle -- reset so we can notify next idle session
+        if (idleTime < TimeSpan.FromSeconds(10))
+        {
+            _idleNotifiedThisSession = false;
+        }
+    }
+
+    private async void RunAnalysis(string context)
+    {
+        if (!_running || _analyzing || IsSnoozed()) return;
         _analyzing = true;
 
         try
         {
-            var insight = await AnalyzeNowAsync();
+            var screenshot = await Task.Run(() => _screenCapture.CaptureFullScreen());
+            var insight = await _aiService.WatchScreenAsync(screenshot);
+
             if (insight.ShouldNotify)
             {
-                InsightReady?.Invoke(this, insight);
+                // Avoid repeating the same insight
+                var currentContext = $"{insight.Type}:{insight.Summary}";
+                if (currentContext != _lastScreenContext)
+                {
+                    _lastScreenContext = currentContext;
+                    InsightReady?.Invoke(this, insight);
+                }
             }
         }
         catch
         {
-            // Silently fail -- don't bother the user if screen watch fails
+            // Silently fail
         }
         finally
         {
             _analyzing = false;
-            ScheduleNext();
+            if (_running) SchedulePeriodicScan();
         }
+    }
+
+    private bool IsSnoozed()
+    {
+        if (_snoozedUntil.HasValue && DateTime.Now < _snoozedUntil.Value)
+            return true;
+        _snoozedUntil = null;
+        return false;
+    }
+
+    private static TimeSpan GetIdleTime()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info))
+            return TimeSpan.Zero;
+
+        var idleMs = (uint)Environment.TickCount - info.dwTime;
+        return TimeSpan.FromMilliseconds(idleMs);
     }
 
     public void Dispose()
