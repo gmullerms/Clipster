@@ -34,14 +34,25 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipster");
+        Directory.CreateDirectory(logDir);
+        var logPath = Path.Combine(logDir, "crash.log");
+
         DispatcherUnhandledException += (_, args) =>
         {
-            var logPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipster", "crash.log");
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.WriteAllText(logPath, $"{DateTime.Now}\n{args.Exception}\n");
-            Console.Error.WriteLine(args.Exception);
+            File.AppendAllText(logPath, $"\n[{DateTime.Now}] UI THREAD:\n{args.Exception}\n");
             args.Handled = true;
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            File.AppendAllText(logPath, $"\n[{DateTime.Now}] BACKGROUND THREAD:\n{args.ExceptionObject}\n");
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            File.AppendAllText(logPath, $"\n[{DateTime.Now}] UNOBSERVED TASK:\n{args.Exception}\n");
+            args.SetObserved();
         };
 
         try
@@ -91,10 +102,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            var logPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipster", "crash.log");
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.WriteAllText(logPath, $"{DateTime.Now}\n{ex}\n");
+            File.AppendAllText(logPath, $"\n[{DateTime.Now}] STARTUP:\n{ex}\n");
             MessageBox.Show($"Clipster failed to start:\n\n{ex.Message}", "Clipster Error", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
