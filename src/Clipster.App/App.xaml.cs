@@ -28,6 +28,7 @@ public partial class App : Application
     private TaskbarIcon? _trayIcon;
     private ClipsterOverlayWindow? _overlayWindow;
     private GlobalHotkeyService? _hotkeyService;
+    private ScreenWatcherService? _screenWatcher;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -57,10 +58,19 @@ public partial class App : Application
             _overlayWindow = _host.Services.GetRequiredService<ClipsterOverlayWindow>();
             _overlayWindow.Show();
 
-            // Register global hotkey (Ctrl+Shift+Space)
+            // Register global hotkeys
             _hotkeyService = new GlobalHotkeyService();
-            _hotkeyService.HotkeyPressed += OnQuickPromptHotkey;
+            _hotkeyService.QuickPromptPressed += OnQuickPromptHotkey;
+            _hotkeyService.ScreenScanPressed += OnScreenScanHotkey;
             _hotkeyService.Register(_overlayWindow);
+
+            // Start screen watcher (periodic background analysis)
+            _screenWatcher = new ScreenWatcherService(
+                _host.Services.GetRequiredService<IScreenCaptureService>(),
+                _host.Services.GetRequiredService<IAiService>());
+            _screenWatcher.InsightReady += OnScreenInsightReady;
+            if (!string.IsNullOrWhiteSpace(settings.Settings.ApiKey))
+                _screenWatcher.Start(TimeSpan.FromMinutes(5));
 
             // Setup system tray
             SetupTrayIcon();
@@ -216,6 +226,77 @@ public partial class App : Application
         }
     }
 
+    private async void OnScreenScanHotkey(object? sender, EventArgs e)
+    {
+        if (_screenWatcher == null) return;
+
+        var animationService = _host!.Services.GetRequiredService<IAnimationService>();
+        var windowManager = _host.Services.GetRequiredService<IWindowManager>();
+
+        animationService.TransitionTo(AnimationState.Looking);
+        windowManager.ShowBubble("Let me take a look at your screen...", TimeSpan.FromSeconds(20));
+
+        try
+        {
+            var insight = await _screenWatcher.AnalyzeNowAsync();
+
+            if (insight.ShouldNotify)
+            {
+                ShowInsightBubble(insight, animationService, windowManager);
+            }
+            else
+            {
+                animationService.PlayOnce(AnimationState.Talking);
+                windowManager.ShowBubble(
+                    "Everything looks good! I don't see any issues on your screen.",
+                    TimeSpan.FromSeconds(6));
+            }
+        }
+        catch (Exception ex)
+        {
+            animationService.TransitionTo(AnimationState.Confused);
+            windowManager.ShowBubble($"Couldn't analyze the screen: {ex.Message}", TimeSpan.FromSeconds(8));
+        }
+    }
+
+    private void OnScreenInsightReady(object? sender, ScreenInsight insight)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            var animationService = _host!.Services.GetRequiredService<IAnimationService>();
+            var windowManager = _host.Services.GetRequiredService<IWindowManager>();
+            ShowInsightBubble(insight, animationService, windowManager);
+        });
+    }
+
+    private void ShowInsightBubble(ScreenInsight insight, IAnimationService animationService, IWindowManager windowManager)
+    {
+        // Pick animation based on insight type
+        var anim = insight.Type switch
+        {
+            InsightType.Error => AnimationState.Pointing,
+            InsightType.Warning => AnimationState.Pointing,
+            InsightType.Suggestion => AnimationState.Greeting,
+            InsightType.Question => AnimationState.Greeting,
+            _ => AnimationState.Talking
+        };
+        animationService.PlayOnce(anim);
+
+        var actions = new List<BubbleAction>
+        {
+            new() { Label = "Help me!", Callback = () => windowManager.ShowChat(
+                $"I noticed this on my screen: {insight.Summary}\n\n{insight.Detail}\n\nPlease help me with this.") },
+            new() { Label = "Got it", Callback = () => windowManager.HideBubble() },
+            new() { Label = "Shh (30m)", Callback = () => { _screenWatcher?.Snooze(TimeSpan.FromMinutes(30)); windowManager.HideBubble(); } },
+        };
+
+        var bubbleText = insight.Summary;
+        if (!string.IsNullOrWhiteSpace(insight.Detail))
+            bubbleText += $"\n\n{insight.Detail}";
+
+        windowManager.ShowBubble(bubbleText, TimeSpan.FromSeconds(20), actions);
+    }
+
     private void SetupTrayIcon()
     {
         _trayIcon = new TaskbarIcon
@@ -232,6 +313,10 @@ public partial class App : Application
         var quickItem = new System.Windows.Controls.MenuItem { Header = "Quick Prompt  (Ctrl+Shift+Space)" };
         quickItem.Click += (_, _) => OnQuickPromptHotkey(null, EventArgs.Empty);
         menu.Items.Add(quickItem);
+
+        var scanItem = new System.Windows.Controls.MenuItem { Header = "Scan Screen  (Ctrl+Shift+S)" };
+        scanItem.Click += (_, _) => OnScreenScanHotkey(null, EventArgs.Empty);
+        menu.Items.Add(scanItem);
 
         var chatItem = new System.Windows.Controls.MenuItem { Header = "Open Chat" };
         chatItem.Click += (_, _) => _host?.Services.GetRequiredService<IWindowManager>().ShowChat();
@@ -289,6 +374,7 @@ public partial class App : Application
         var exitItem = new System.Windows.Controls.MenuItem { Header = "Exit" };
         exitItem.Click += (_, _) =>
         {
+            _screenWatcher?.Dispose();
             _hotkeyService?.Dispose();
             _trayIcon?.Dispose();
             _overlayWindow?.Close();
@@ -321,6 +407,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _screenWatcher?.Dispose();
         _hotkeyService?.Dispose();
         _trayIcon?.Dispose();
         _host?.Dispose();

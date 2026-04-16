@@ -124,6 +124,64 @@ public class OpenAiService : IAiService
         return ParseQuickPromptResponse(raw);
     }
 
+    public async Task<ScreenInsight> WatchScreenAsync(byte[] screenshotPng, CancellationToken ct = default)
+    {
+        var client = CreateClient();
+        var imageData = BinaryData.FromBytes(screenshotPng);
+        var messages = new List<AiChatMessage>
+        {
+            AiChatMessage.CreateSystemMessage(PromptTemplates.ScreenWatcherPrompt),
+            AiChatMessage.CreateUserMessage(
+                ChatMessageContentPart.CreateImagePart(imageData, "image/png"),
+                ChatMessageContentPart.CreateTextPart("Analyze this screenshot. What do you see?"))
+        };
+
+        var completion = await client.CompleteChatAsync(messages, cancellationToken: ct);
+        var raw = completion.Value.Content[0].Text;
+
+        return ParseScreenInsight(raw);
+    }
+
+    private static ScreenInsight ParseScreenInsight(string raw)
+    {
+        var type = InsightType.None;
+        var summary = string.Empty;
+        var detail = string.Empty;
+
+        foreach (var line in raw.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("TYPE:", StringComparison.OrdinalIgnoreCase))
+            {
+                var val = trimmed[5..].Trim();
+                type = val.ToLowerInvariant() switch
+                {
+                    "error" => InsightType.Error,
+                    "warning" => InsightType.Warning,
+                    "suggestion" => InsightType.Suggestion,
+                    "question" => InsightType.Question,
+                    _ => InsightType.None
+                };
+            }
+            else if (trimmed.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
+            {
+                summary = trimmed[8..].Trim();
+            }
+            else if (trimmed.StartsWith("DETAIL:", StringComparison.OrdinalIgnoreCase))
+            {
+                detail = trimmed[7..].Trim();
+            }
+        }
+
+        return new ScreenInsight
+        {
+            Type = type,
+            Summary = summary,
+            Detail = detail,
+            ShouldNotify = type != InsightType.None && !string.IsNullOrWhiteSpace(summary)
+        };
+    }
+
     private static QuickPromptResult ParseQuickPromptResponse(string raw)
     {
         var separatorIndex = raw.IndexOf("\n---", StringComparison.Ordinal);
@@ -141,7 +199,6 @@ public class OpenAiService : IAiService
             };
         }
 
-        // No separator found -- treat the whole thing as clipboard content
         return new QuickPromptResult
         {
             ClipboardContent = raw.Trim(),
