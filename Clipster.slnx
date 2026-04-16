@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Clipster.App/Clipster.App.csproj" />
+    <Project Path="src/Clipster.Core/Clipster.Core.csproj" />
+    <Project Path="src/Clipster.Services/Clipster.Services.csproj" />
+    <Project Path="src/Clipster.ViewModels/Clipster.ViewModels.csproj" />
+  </Folder>
+</Solution>
